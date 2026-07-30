@@ -20,18 +20,25 @@ Arquivos obrigatórios:
   dev:
     $REPO_ROOT/.github/infra/stack-dev.yml
     $REPO_ROOT/.github/infra/portainer.dev.env
+    $REPO_ROOT/.github/infra/stack-dev.env (opcional — envs do app)
 
   prod:
     $REPO_ROOT/.github/infra/stack-prod.yml
     $REPO_ROOT/.github/infra/portainer.prod.env
+    $REPO_ROOT/.github/infra/stack-prod.env (opcional — envs do app)
 
-Formato do arquivo .env:
+Formato do arquivo portainer.*.env:
   PORTAINER_URL=https://portainer.exemplo.com
   PORTAINER_API_KEY=seu_token
   PORTAINER_ENDPOINT_ID=1
 
+Formato do arquivo stack-*.env:
+  PUBLIC_URL=https://app.exemplo.com
+  JWT_SECRET=segredo
+  DATABASE_URL=postgres://...
+
 Formato esperado no compose:
-  image: ghcr.io/ericocesar/consigcrm:\${IMAGE_TAG}
+  image: ghcr.io/ericocesar/agents:\${IMAGE_TAG}
 
 Dependências:
   curl
@@ -86,10 +93,12 @@ select_environment() {
     dev)
       STACK_FILE="$REPO_ROOT/.github/infra/stack-dev.yml"
       ENV_FILE="$REPO_ROOT/.github/infra/portainer.dev.env"
+      STACK_ENV_FILE="$REPO_ROOT/.github/infra/stack-dev.env"
       ;;
     prod)
       STACK_FILE="$REPO_ROOT/.github/infra/stack-prod.yml"
       ENV_FILE="$REPO_ROOT/.github/infra/portainer.prod.env"
+      STACK_ENV_FILE="$REPO_ROOT/.github/infra/stack-prod.env"
       ;;
     *)
       fail "ambiente inválido: '$env_name'. Use 'dev' ou 'prod'"
@@ -269,10 +278,42 @@ find_stack_id() {
   printf '%s' "$RESPONSE_BODY" | jq -r --arg name "$stack_name" '.[] | select(.Name == $name) | .Id' | head -n1
 }
 
+load_stack_envs_json() {
+  # Converte stack-*.env em JSON array para o campo "env" da API do Portainer.
+  # Retorna "[]" se o arquivo não existir.
+  local env_file="$1"
+  if [ ! -f "$env_file" ]; then
+    printf '[]'
+    return
+  fi
+
+  python3 -c "
+import json, re
+from pathlib import Path
+
+envs = []
+for line in Path('${env_file}').read_text(encoding='utf-8').splitlines():
+    line = line.strip()
+    if not line or line.startswith('#'):
+        continue
+    m = re.match(r'^([A-Za-z_][A-Za-z0-9_]*)=(.*)', line)
+    if not m:
+        continue
+    key = m.group(1)
+    val = m.group(2)
+    if len(val) >= 2 and val[0] == val[-1] and val[0] in ('\"', \"'\"):
+        val = val[1:-1]
+    envs.append({'name': key, 'value': val})
+
+print(json.dumps(envs, ensure_ascii=False))
+" 2>/dev/null || printf '[]'
+}
+
 create_stack() {
   local stack_name="$1"
   local stack_content="$2"
   local swarm_id="$3"
+  local stack_envs_json="$4"
 
   local payload
   payload="$(
@@ -280,11 +321,12 @@ create_stack() {
       --arg name "$stack_name" \
       --arg content "$stack_content" \
       --arg swarm_id "$swarm_id" \
+      --argjson env "$stack_envs_json" \
       '{
         name: $name,
         stackFileContent: $content,
         swarmID: $swarm_id,
-        env: [],
+        env: $env,
         fromAppTemplate: false
       }'
   )"
@@ -308,14 +350,16 @@ update_stack() {
   local stack_id="$1"
   local stack_name="$2"
   local stack_content="$3"
+  local stack_envs_json="$4"
 
   local payload
   payload="$(
     jq -n \
       --arg content "$stack_content" \
+      --argjson env "$stack_envs_json" \
       '{
         stackFileContent: $content,
-        env: [],
+        env: $env,
         prune: true,
         pullImage: true
       }'
@@ -366,12 +410,19 @@ main() {
   local stack_content
   stack_content="$(render_stack_content "$STACK_FILE" "$image_tag")"
 
+  local stack_envs_json
+  stack_envs_json="$(load_stack_envs_json "$STACK_ENV_FILE")"
+  local stack_env_count
+  stack_env_count="$(printf '%s' "$stack_envs_json" | python3 -c 'import sys,json; print(len(json.load(sys.stdin)))' 2>/dev/null || echo 0)"
+
   log "repo root: $REPO_ROOT"
   log "ambiente: $ENVIRONMENT"
   log "stack: $stack_name"
   log "image tag: $image_tag"
   log "arquivo stack: $STACK_FILE"
-  log "arquivo env: $ENV_FILE"
+  log "arquivo portainer env: $ENV_FILE"
+  log "arquivo stack env: $STACK_ENV_FILE"
+  log "envs do app: $stack_env_count"
   log "portainer: $PORTAINER_URL"
   log "endpoint: $PORTAINER_ENDPOINT_ID"
 
@@ -382,13 +433,13 @@ main() {
 
   if [ -n "$stack_id" ]; then
     log "stack encontrada, iniciando atualização"
-    update_stack "$stack_id" "$stack_name" "$stack_content"
+    update_stack "$stack_id" "$stack_name" "$stack_content" "$stack_envs_json"
   else
     log "stack não encontrada, iniciando criação"
     local swarm_id
     swarm_id="$(get_swarm_id)"
     log "swarm ID: $swarm_id"
-    create_stack "$stack_name" "$stack_content" "$swarm_id"
+    create_stack "$stack_name" "$stack_content" "$swarm_id" "$stack_envs_json"
   fi
 }
 
