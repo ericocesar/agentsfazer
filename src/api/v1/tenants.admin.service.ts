@@ -1,10 +1,14 @@
 import type { PrismaClient } from "@/../generated/prisma/client";
-import { ProEditionError } from "@/lib/errors";
+import basePrisma from "@/api/lib/prisma";
+import { ConflictError, ForbiddenError, ProEditionError } from "@/lib/errors";
 import type { TenantContext } from "@/lib/tenancy";
+import { asSuperAdminOn } from "@/lib/tenancy/multi-tenant";
 import type { TenantCreate, TenantDto, TenantUpdate } from "./tenants.service";
+import { TENANT_SELECT, toDto } from "./tenants.service";
 
-// Tenant mutation stub: create/update/delete require the Pro edition and refuse with a 403 that the
-// client turns into an upgrade prompt. The single tenant is created at /setup.
+// Tenant mutation: create is available in the Free edition (multi-tenant management and the
+// destructive operations require Pro). updateTenant and deleteTenant remain Pro-gated since they
+// affect existing tenants and carry higher risk / infrastructure cost.
 
 export async function updateTenant(
   _ctx: TenantContext,
@@ -16,11 +20,30 @@ export async function updateTenant(
 }
 
 export async function createTenant(
-  _ctx: TenantContext,
-  _input: TenantCreate,
-  _base?: PrismaClient,
+  ctx: TenantContext,
+  input: TenantCreate,
+  base: PrismaClient = basePrisma,
 ): Promise<TenantDto> {
-  throw new ProEditionError();
+  // Only SUPER_ADMIN may provision tenants (the controller gates on requireRole too, but this
+  // defense-in-depth keeps the service safe when called bypassing the HTTP layer, e.g. tests).
+  if (ctx.role !== "SUPER_ADMIN") {
+    throw new ForbiddenError();
+  }
+  // Check slug uniqueness before attempting the write.
+  const existing = await asSuperAdminOn(base, (db) =>
+    db.tenant.findUnique({ where: { slug: input.slug }, select: { id: true } }),
+  );
+  if (existing) {
+    throw new ConflictError("Slug already in use", "errors.tenantSlugInUse");
+  }
+
+  const row = await asSuperAdminOn(base, (db) =>
+    db.tenant.create({
+      data: { name: input.name, slug: input.slug },
+      select: TENANT_SELECT,
+    }),
+  );
+  return toDto(row);
 }
 
 export async function deleteTenant(
