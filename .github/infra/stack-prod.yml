@@ -2,8 +2,6 @@ services:
   agents:
     image: ghcr.io/ericocesar/agents:${IMAGE_TAG}
     restart: always
-    env_file:
-      - stack-prod.env
     environment:
       - NODE_ENV=production
       - PORT=3000
@@ -17,11 +15,11 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       # Superuser/owner connection — migrations + bootstrap only. Matches the postgres container creds below.
-      - MIGRATION_DATABASE_URL=${MIGRATION_DATABASE_URL}
+      - MIGRATION_DATABASE_URL=postgres://postgres:${POSTGRES_PASSWORD}@postgres_agents:5432/${POSTGRES_DB:-agents}?sslmode=disable
       # Runtime role — NON-superuser, NON-bypassrls (db-bootstrap creates it from this URL). RLS holds.
-      - DATABASE_URL=${DATABASE_URL}
+      - DATABASE_URL=postgres://app_agent:${POSTGRES_PASSWORD}@postgres_agents:5432/${POSTGRES_DB:-agents}?sslmode=disable
       # Checkpointer pool — MUST be the runtime (non-superuser) role, never the migration URL.
-      - LANGGRAPH_DATABASE_URL=${LANGGRAPH_DATABASE_URL}
+      - LANGGRAPH_DATABASE_URL=postgres://app_agent:${POSTGRES_PASSWORD}@postgres_agents:5432/${POSTGRES_DB:-agents}?sslmode=disable
       # Persist uploaded branding + generated quote PDFs on the `storage` volume (defaults live on the
       # ephemeral container FS and vanish on every redeploy).
       - BRANDING_STORAGE_DIR=/app/storage/branding
@@ -65,8 +63,6 @@ services:
   postgres_agents:
     image: "pgvector/pgvector:pg17"
     restart: always
-    env_file:
-      - stack-prod.env
     environment:
       - POSTGRES_DB=agents
       - POSTGRES_USER=${POSTGRES_USER}
