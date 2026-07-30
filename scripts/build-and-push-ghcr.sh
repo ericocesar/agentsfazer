@@ -211,106 +211,30 @@ fi
 docker buildx inspect --bootstrap > /dev/null
 echo "    ✓ Builder ready"
 
-# Build per-platform digests for multi-arch manifest
-DIGEST_DIR="$(mktemp -d)"
-trap 'rm -rf "${DIGEST_DIR}"' EXIT
+echo ""
+echo ">>> Building and pushing Docker image (${PLATFORMS})..."
 
-# Count platforms
-PLATFORM_LIST=(${PLATFORMS//,/ })
-PLATFORM_COUNT=${#PLATFORM_LIST[@]}
-
-if [[ "${PLATFORM_COUNT}" -eq 1 ]]; then
-  # Single platform: build --push directly
-  echo ""
-  echo ">>> Building and pushing Docker image (single platform: ${PLATFORMS})..."
-
-  BUILD_TAGS=(
-    -t "${IMAGE_NAME}:${TAG_LATEST}"
-    -t "${IMAGE_NAME}:${TAG_SHA}"
-    -t "${IMAGE_NAME}:${TAG_BRANCH}"
-  )
-  if [[ "${IS_TAG}" == "true" ]]; then
-    BUILD_TAGS+=(-t "${IMAGE_NAME}:${TAG_VERSION}")
-  fi
-
-  docker buildx build \
-    --platform "${PLATFORMS}" \
-    --push \
-    -f "./Dockerfile" \
-    "${BUILD_TAGS[@]}" \
-    --build-arg "BUN_PUBLIC_CDN_URL=${BUN_PUBLIC_CDN_URL}" \
-    --build-arg "BUN_PUBLIC_EDITION=${BUN_PUBLIC_EDITION}" \
-    --cache-from "type=gha" \
-    --cache-to "type=gha,mode=max" \
-    .
-
-  echo "    ✓ Image built and pushed"
-else
-  # Multi-platform: build each platform separately, export digest, then merge manifest
-  echo ""
-  echo ">>> Building Docker image for ${PLATFORM_COUNT} platforms..."
-
-  for platform in "${PLATFORM_LIST[@]}"; do
-    platform_pair="${platform//\//-}"
-    echo ""
-    echo "  Building for ${platform}..."
-
-    # Update package.json version before each build (idempotent if tag)
-    if [[ "${IS_TAG}" == "true" ]]; then
-      npm version "${TAG_VERSION}" --no-git-tag-version --allow-same-version 2>/dev/null || true
-    fi
-
-    docker buildx build \
-      --platform "${platform}" \
-      --push \
-      -f "./Dockerfile" \
-      -t "${IMAGE_NAME}:${platform_pair}" \
-      --build-arg "BUN_PUBLIC_CDN_URL=${BUN_PUBLIC_CDN_URL}" \
-      --build-arg "BUN_PUBLIC_EDITION=${BUN_PUBLIC_EDITION}" \
-      --cache-from "type=gha,scope=${platform_pair}" \
-      --cache-to "type=gha,mode=max,scope=${platform_pair}" \
-      --output "type=image,push-by-digest=true,name=${IMAGE_NAME},destination-tag=${platform_pair}" \
-      . 2>&1 | tee "${DIGEST_DIR}/${platform_pair}.log"
-
-    # Extract digest from the output
-    digest="$(docker buildx imagetools inspect "${IMAGE_NAME}:${platform_pair}" --format '{{.Manifest.Digest}}')"
-    echo "${digest#sha256:}" > "${DIGEST_DIR}/${platform_pair}"
-    echo "  ✓ ${platform} digest: ${digest}"
-  done
-
-  echo ""
-  echo ">>> Creating multi-arch manifest..."
-  MANIFEST_TAGS=(
-    -t "${IMAGE_NAME}:${TAG_LATEST}"
-    -t "${IMAGE_NAME}:${TAG_SHA}"
-    -t "${IMAGE_NAME}:${TAG_BRANCH}"
-  )
-  if [[ "${IS_TAG}" == "true" ]]; then
-    MANIFEST_TAGS+=(-t "${IMAGE_NAME}:${TAG_VERSION}")
-  fi
-
-  DIGEST_FILES=()
-  for platform in "${PLATFORM_LIST[@]}"; do
-    platform_pair="${platform//\//-}"
-    file="${DIGEST_DIR}/${platform_pair}"
-    if [[ -f "${file}" ]]; then
-      DIGEST_FILES+=("${IMAGE_NAME}@sha256:$(cat "${file}")")
-    fi
-  done
-
-  docker buildx imagetools create \
-    "${MANIFEST_TAGS[@]}" \
-    "${DIGEST_FILES[@]}"
-
-  echo ""
-  echo ">>> Inspecting final manifest..."
-  docker buildx imagetools inspect "${IMAGE_NAME}:${TAG_LATEST}"
-  docker buildx imagetools inspect "${IMAGE_NAME}:${TAG_SHA}"
-  docker buildx imagetools inspect "${IMAGE_NAME}:${TAG_BRANCH}"
-
-  echo ""
-  echo "    ✓ Multi-arch manifest created and pushed"
+BUILD_TAGS=(
+  -t "${IMAGE_NAME}:${TAG_LATEST}"
+  -t "${IMAGE_NAME}:${TAG_SHA}"
+  -t "${IMAGE_NAME}:${TAG_BRANCH}"
+)
+if [[ "${IS_TAG}" == "true" ]]; then
+  BUILD_TAGS+=(-t "${IMAGE_NAME}:${TAG_VERSION}")
 fi
+
+docker buildx build \
+  --platform "${PLATFORMS}" \
+  --push \
+  -f "./Dockerfile" \
+  "${BUILD_TAGS[@]}" \
+  --build-arg "BUN_PUBLIC_CDN_URL=${BUN_PUBLIC_CDN_URL}" \
+  --build-arg "BUN_PUBLIC_EDITION=${BUN_PUBLIC_EDITION}" \
+  --cache-from "type=gha" \
+  --cache-to "type=gha,mode=max" \
+  .
+
+echo "    ✓ Image built and pushed"
 
 # -------------------------
 # 9. Build info
