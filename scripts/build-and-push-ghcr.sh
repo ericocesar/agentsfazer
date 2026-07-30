@@ -168,7 +168,7 @@ else
 fi
 
 # -------------------------
-# 6. Prerequisites: Docker & GHCR login
+# 6. Prerequisites: Docker
 # -------------------------
 echo ""
 echo ">>> Checking Docker..."
@@ -176,16 +176,6 @@ if ! docker system info > /dev/null 2>&1; then
   echo "❌ Docker daemon not running."
   exit 1
 fi
-
-GHCR_TOKEN="${GHCR_TOKEN:-${GITHUB_TOKEN:-}}"
-if [[ -z "${GHCR_TOKEN}" ]]; then
-  echo "❌ GHCR_TOKEN (or GITHUB_TOKEN) not set. Cannot authenticate to GHCR."
-  exit 1
-fi
-
-echo ">>> Logging into ${REGISTRY}..."
-echo "${GHCR_TOKEN}" | docker login "${REGISTRY}" -u "${IMAGE_NAMESPACE_RESOLVED}" --password-stdin
-echo "    ✓ Logged in"
 
 # -------------------------
 # 7. Update package.json version (if tag)
