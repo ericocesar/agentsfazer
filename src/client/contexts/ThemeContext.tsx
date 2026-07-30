@@ -101,10 +101,21 @@ export interface ThemedAsset {
 export function useThemedAsset(path: string): ThemedAsset {
   const { resolvedTheme } = useTheme();
   return useMemo(() => {
-    if (resolvedTheme === "dark") return { src: getAssetUrl(path) };
     const dot = path.lastIndexOf(".");
+    const base = path.slice(0, dot);
+    const ext = path.slice(dot);
+    if (ext === ".svg") {
+      // SVG convention: logo.svg (light) / logo_dark.svg (dark)
+      return {
+        src: getAssetUrl(
+          resolvedTheme === "dark" ? `${base}_dark${ext}` : path,
+        ),
+      };
+    }
+    // Raster convention: logo.png (dark) / logo-light.png (light)
+    if (resolvedTheme === "dark") return { src: getAssetUrl(path) };
     return {
-      src: getAssetUrl(`${path.slice(0, dot)}-light${path.slice(dot)}`),
+      src: getAssetUrl(`${base}-light${ext}`),
     };
   }, [path, resolvedTheme]);
 }

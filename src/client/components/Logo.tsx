@@ -11,7 +11,7 @@ import { useThemedAsset } from "@/client/contexts/ThemeContext";
 // install doesn't flash the default before the real logo loads. A cache hit is ready synchronously.
 export function Logo({ className }: { className?: string }) {
   const { logoUrl, ready } = useBranding();
-  const fallback = useThemedAsset("/assets/logo.png");
+  const fallback = useThemedAsset("/assets/logo.svg");
   // If the custom logo URL ever fails to load (e.g. a stale config pointing at a just-removed
   // asset), fall back to the bundled default instead of rendering an empty/broken image.
   const [failed, setFailed] = useState(false);
