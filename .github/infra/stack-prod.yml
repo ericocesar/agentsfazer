@@ -68,7 +68,9 @@ services:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     volumes:
-      - "postgres:/var/lib/postgresql/data"
+      - "postgres_agents:/var/lib/postgresql/data"
+    networks:
+      - interna
     healthcheck:
       test:
         - CMD-SHELL
@@ -80,7 +82,7 @@ services:
 volumes:
   storage:
     external: true
-  postgres:
+  postgres_agents:
     external: true
 networks:
   interna:
