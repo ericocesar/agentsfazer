@@ -1,0 +1,90 @@
+services:
+  agents:
+    image: ghcr.io/ericocesar/agents:${IMAGE_TAG}
+    pull_policy: always
+    restart: always
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - PUBLIC_URL=${PUBLIC_URL}
+      - CDN_URL=${PUBLIC_URL}
+      - CORS_ORIGIN=${CORS_ORIGIN:-${PUBLIC_URL}}
+      # First-run: disable the /setup token in this trusted, TLS-fronted onboarding window (the
+      # advisory lock still caps /setup at one admin). Set to `true` to require it.
+      - SETUP_TOKEN_REQUIRED=${SETUP_TOKEN_REQUIRED:-false}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - JWT_SECRET=${JWT_SECRET}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      # Superuser/owner connection — migrations + bootstrap only. Matches the postgres container creds below.
+      - MIGRATION_DATABASE_URL=${MIGRATION_DATABASE_URL}
+      # Runtime role — NON-superuser, NON-bypassrls (db-bootstrap creates it from this URL). RLS holds.
+      - DATABASE_URL=${DATABASE_URL}
+      # Checkpointer pool — MUST be the runtime (non-superuser) role, never the migration URL.
+      - LANGGRAPH_DATABASE_URL=${LANGGRAPH_DATABASE_URL}
+      # Persist uploaded branding + generated quote PDFs on the `storage` volume (defaults live on the
+      # ephemeral container FS and vanish on every redeploy).
+      - BRANDING_STORAGE_DIR=/app/storage/branding
+      - QUOTES_STORAGE_DIR=/app/storage/quotes
+
+    volumes:
+      - "storage:/app/storage"
+    healthcheck:
+      test:
+        ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+    depends_on:
+      - postgres
+
+    networks:
+      - externa
+      - interna
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+      labels:
+        - "traefik.enable=true"
+        - "traefik.docker.network=interna"
+        - "traefik.http.routers.agents.rule=Host(`agents.swbolt.webck.com.br`)"
+        - "traefik.http.routers.agents.priority=3000"
+        - "traefik.http.routers.agents.entrypoints=websecure"
+        - "traefik.http.routers.agents.tls=true"
+        - "traefik.http.routers.agents.tls.certresolver=letsencryptresolver"
+        - "traefik.http.services.agents.loadbalancer.server.port=3000"
+        - "traefik.http.routers.agents.service=agents"
+        - "traefik.http.routers.agents-insecure.rule=Host(`agents.swbolt.webck.com.br`)"
+        - "traefik.http.routers.agents-insecure.entrypoints=web"
+        - "traefik.http.routers.agents-insecure.middlewares=redirect-to-https"
+        - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+  postgres:
+    image: "pgvector/pgvector:pg17"
+    restart: always
+    environment:
+      - POSTGRES_DB=${DATABASE_NAME:-secretaria_v4_db}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - "postgres:/var/lib/postgresql/data"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "pg_isready -h localhost -p 5432 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"
+      interval: 20s
+      timeout: 20s
+      retries: 10
+
+volumes:
+  storage:
+    external: true
+  postgres:
+    external: true
+networks:
+  interna:
+    external: true
+  externa:
+    external: true
