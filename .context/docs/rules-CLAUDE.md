@@ -1,3 +1,10 @@
+# CLAUDE
+
+> **Source:** `CLAUDE.md`
+> **Type:** generic
+
+---
+
 # CLAUDE.md
 
 **fazer.ai agents** — fullstack TypeScript (Bun + Elysia + React 19 + Tailwind v4, Prisma/PostgreSQL, JWT, i18n, Biome) running LangGraph TS for AI agents over Chatwoot. Built on bunfire template. Multi-tenant, "one core, three transports" (REST v1, MCP, UI), Free vs Full.

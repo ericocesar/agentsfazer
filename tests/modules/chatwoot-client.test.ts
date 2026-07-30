@@ -151,7 +151,7 @@ describe("ChatwootClient", () => {
     await client.createKanbanStep(3, { name: "Lead" });
     await client.setBoardInboxes(3, [7, 8]);
     await client.setBoardAgents(3, [1]);
-    await client.moveKanbanTask(99, 5, 100);
+    await client.moveKanbanTask(99, 5);
 
     expect(calls[0]?.url).toBe(
       "https://chat.example.com/api/v1/accounts/5/kanban/boards",
@@ -163,10 +163,10 @@ describe("ChatwootClient", () => {
     expect(calls[2]?.url).toContain("/kanban/boards/3/update_inboxes");
     expect(calls[2]?.body).toMatchObject({ inbox_ids: [7, 8] });
     expect(calls[3]?.body).toMatchObject({ agent_ids: [1] });
-    expect(calls[4]?.url).toContain("/kanban/tasks/99/move");
+    expect(calls[4]?.url).toContain("/cards/99");
+    expect(calls[4]?.method).toBe("PATCH");
     expect(calls[4]?.body).toMatchObject({
-      board_step_id: 5,
-      insert_before_task_id: 100,
+      card: { stage_id: 5 },
     });
   });
 
@@ -177,15 +177,19 @@ describe("ChatwootClient", () => {
       assertSafe: passthroughSafe,
     });
     await client.updateKanbanTask(99, {
-      title: "Maria Souza",
-      priority: "high",
-      dueDate: "2026-06-20",
+      customName: "Maria Souza",
+      leadStatus: "won",
+      scheduledAt: "2026-06-20",
     });
     expect(calls[0]?.method).toBe("PATCH");
-    expect(calls[0]?.url).toContain("/kanban/tasks/99");
+    expect(calls[0]?.url).toContain("/cards/99");
     expect(calls[0]?.headers["api-access-token"]).toBe("ADMIN_TOK");
     expect(calls[0]?.body).toEqual({
-      task: { title: "Maria Souza", priority: "high", due_date: "2026-06-20" },
+      card: {
+        custom_name: "Maria Souza",
+        lead_status: "won",
+        scheduled_at: "2026-06-20",
+      },
     });
   });
 

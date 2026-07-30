@@ -1,11 +1,11 @@
 import type { ChatwootClient } from "@/modules/chatwoot/client";
 
-// The Chatwoot Pro kanban context for a conversation's card: which board/step it sits in now, the
-// board's steps (name → id, plus the operator's per-step note) so kanban_move_card can take a STEP
-// NAME (the agent can't know ids), and a best-effort snapshot of the card's own data (title, value,
-// priority, status, custom attributes) so the agent SEES the funnel state instead of being blind.
-// Resolved at turn prep (network, outside any tx). Shapes confirmed against the Pro fork jbuilders
-// (fazer_ai/app/views/api/v1/accounts/kanban/{tasks/_task,board_steps/_board_step}.json.jbuilder).
+// The bChat pipeline context for a conversation's card: which funnel/stage it sits in now, the
+// funnel's stages (name → id, plus the operator's per-stage note) so kanban_move_card can take a
+// STAGE NAME (the agent can't know ids), and a best-effort snapshot of the card's own data
+// (custom_name, notes, lead_status, scheduled_at) so the agent SEES the pipeline state instead of
+// being blind. Resolved at turn prep (network, outside any tx). Shapes follow
+// docs/integrations/bchat/pipeline.md.
 
 export interface KanbanStep {
   id: number;
@@ -17,21 +17,26 @@ export interface KanbanStep {
   cancelled?: boolean;
 }
 
-// Best-effort snapshot of the card's current data. Any field is null/empty when absent on the fork
-// payload (older fork build, unset field) — the loader never throws on a missing field.
+// Best-effort snapshot of the card's current data per bChat pipeline doc (docs/integrations/bchat/pipeline.md).
+// The card response includes conversation_custom_attributes and labels for read-only access; mutations
+// go through the conversation endpoints. Any field is null/empty when absent on the payload — the
+// loader never throws on a missing field.
 export interface KanbanCard {
-  title: string | null;
-  // Card description + scheduled dates (ISO 8601 strings from the fork payload). Surfaced so the agent
-  // sees the current values before a partial update via update_kanban_task. null when unset/absent.
-  description: string | null;
-  priority: string | null;
-  status: string | null;
+  // card.custom_name (string)
+  customName: string | null;
+  // card.notes (text)
+  notes: string | null;
+  // card.lead_status — "open" | "won" | "lost"
+  leadStatus: string | null;
+  // card.total_value — sum of card items (numeric)
   value: number | null;
-  startDate: string | null;
-  dueDate: string | null;
-  attributes: Record<string, unknown>;
-  // Current labels on the card (from `task.labels` = cached_label_list_array). Read by assign_label
-  // (scope 'task') to append idempotently. Empty when the fork build predates task labels.
+  // card.scheduled_at — single ISO 8601 datetime (replaces old start_date + due_date)
+  scheduledAt: string | null;
+  // card.assigned_user_id
+  assignedUserId: number | null;
+  // card.conversation_custom_attributes — read-only, from linked conversation
+  conversationCustomAttributes: Record<string, unknown>;
+  // card.labels — read-only, inherited from linked conversation. Empty when none.
   labels: string[];
 }
 
@@ -110,70 +115,62 @@ async function loadBoardSteps(
   return steps;
 }
 
-// Resolves the conversation's card → board + current step + the board's steps + the card snapshot.
+// Resolves the conversation's card → funnel + current stage + the funnel's stages + the card snapshot.
 // Returns null when the conversation has no linked card. Does NOT swallow errors (the caller treats a
-// throw as "no kanban context" and the tool degrades). `cacheKey` scopes the step cache to the
-// instance.
+// throw as "no kanban context" and the tool degrades). `cacheKey` scopes the stage cache to the
+// instance. Field mapping follows bChat pipeline card response (docs/integrations/bchat/pipeline.md).
 export async function loadKanbanContext(
   client: ChatwootClient,
   conversationId: number,
   cacheKey: string,
   now: number = Date.now(),
 ): Promise<KanbanContext | null> {
-  // The conversation payload embeds the whole card under `kanban_task` (same shape as GET
-  // /kanban/tasks/:id), so ONE conversation GET yields the board + current step + card snapshot — no
-  // separate task fetch. Confirmed against the Pro fork conversations/_conversation.json.jbuilder.
-  const task = (await client.kanbanTaskForConversation(conversationId)) as {
-    id?: unknown;
-    board_id?: unknown;
-    board_step_id?: unknown;
-    board?: { name?: unknown } | null;
-    title?: unknown;
-    description?: unknown;
-    priority?: unknown;
-    status?: unknown;
-    value?: unknown;
-    start_date?: unknown;
-    due_date?: unknown;
-    custom_attributes?: unknown;
-    labels?: unknown;
-  } | null;
-  if (task == null) return null;
-  const taskId = Number(task.id);
-  if (!Number.isInteger(taskId) || taskId <= 0) return null;
-  const boardId = Number(task.board_id);
-  const currentStepId = Number(task.board_step_id);
-  const hasBoard = Number.isInteger(boardId) && boardId > 0;
-  // The embedded board.steps carry only {id,name,color}; the per-step description + cancelled flag live
-  // on the board_steps endpoint, so resolve the full steps there (cached per board).
-  const steps = hasBoard
-    ? await loadBoardSteps(client, cacheKey, boardId, now)
+  // The conversation payload may embed the card under `kanban_task` (old fork) or `card` (bChat).
+  const raw = (await client.kanbanTaskForConversation(
+    conversationId,
+  )) as Record<string, unknown> | null;
+  if (raw == null) return null;
+  const cardId = Number(raw.id);
+  if (!Number.isInteger(cardId) || cardId <= 0) return null;
+  // bChat card uses stage_id (not board_step_id) and references funnel via stage's funnel_id.
+  // The embedded card may carry stage + funnel info as nested objects or flat ids.
+  const stageId = Number(raw.stage_id ?? raw.board_step_id);
+  const funnelId = Number(raw.funnel_id ?? raw.board_id);
+  const hasFunnel = Number.isInteger(funnelId) && funnelId > 0;
+  // Resolve funnel stages (cached per funnel).
+  const stages = hasFunnel
+    ? await loadBoardSteps(client, cacheKey, funnelId, now)
     : [];
-  const currentStep =
-    Number.isInteger(currentStepId) && currentStepId > 0
-      ? (steps.find((s) => s.id === currentStepId) ?? null)
+  const currentStage =
+    Number.isInteger(stageId) && stageId > 0
+      ? (stages.find((s) => s.id === stageId) ?? null)
       : null;
+  // bChat card response: funnel name may be nested under `funnel` or `board` object, or flat.
+  const funnelName =
+    raw.funnel && typeof raw.funnel === "object"
+      ? strOrNull((raw.funnel as Record<string, unknown>).name)
+      : raw.board && typeof raw.board === "object"
+        ? strOrNull((raw.board as Record<string, unknown>).name)
+        : null;
   return {
-    taskId,
-    boardId: hasBoard ? boardId : null,
-    boardName:
-      task.board && typeof task.board.name === "string"
-        ? task.board.name
-        : null,
-    currentStepId: currentStep?.id ?? null,
-    currentStepName: currentStep?.name ?? null,
-    steps,
+    taskId: cardId,
+    boardId: hasFunnel ? funnelId : null,
+    boardName: funnelName,
+    currentStepId: currentStage?.id ?? null,
+    currentStepName: currentStage?.name ?? null,
+    steps: stages,
     card: {
-      title: strOrNull(task.title),
-      description: strOrNull(task.description),
-      priority: strOrNull(task.priority),
-      status: strOrNull(task.status),
-      value: numOrNull(task.value),
-      startDate: strOrNull(task.start_date),
-      dueDate: strOrNull(task.due_date),
-      attributes: plainAttributes(task.custom_attributes),
-      labels: Array.isArray(task.labels)
-        ? task.labels.filter((l): l is string => typeof l === "string")
+      customName: strOrNull(raw.custom_name ?? raw.title),
+      notes: strOrNull(raw.notes ?? raw.description),
+      leadStatus: strOrNull(raw.lead_status ?? raw.status),
+      value: numOrNull(raw.total_value ?? raw.value),
+      scheduledAt: strOrNull(raw.scheduled_at),
+      assignedUserId: numOrNull(raw.assigned_user_id),
+      conversationCustomAttributes: plainAttributes(
+        raw.conversation_custom_attributes ?? raw.custom_attributes,
+      ),
+      labels: Array.isArray(raw.labels)
+        ? raw.labels.filter((l): l is string => typeof l === "string")
         : [],
     },
   };

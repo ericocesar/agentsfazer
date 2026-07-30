@@ -785,14 +785,13 @@ async function maybeConsumeCommandOrGate(params: {
       const client = await loadChatwootClient(tenantId, instanceId, { base });
       await client.setConversationLabels(conversationId, []);
       await client.setConversationCustomAttributes(conversationId, {});
-      // Clear the linked kanban card's scheduled dates too (item 17): a reset is a clean slate, so a
-      // stale start/due date from the prior episode must not linger. Title/description/step are kept
+      // Clear the linked card's scheduled datetime too (item 17): a reset is a clean slate, so a
+      // stale scheduled_at from the prior episode must not linger. customName/notes/stage are kept
       // (they identify the card / hold operator notes). Best-effort — no card ⇒ skip.
-      const taskId = await client.kanbanTaskIdForConversation(conversationId);
-      if (taskId != null) {
-        await client.updateKanbanTask(taskId, {
-          startDate: null,
-          dueDate: null,
+      const cardId = await client.kanbanTaskIdForConversation(conversationId);
+      if (cardId != null) {
+        await client.updateKanbanTask(cardId, {
+          scheduledAt: null,
         });
       }
     } catch (err) {

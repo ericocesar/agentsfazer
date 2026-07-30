@@ -53,3 +53,10 @@ tmp/*
 # Python bytecode cache (the onboarding skill ships .py helpers)
 __pycache__/
 *.pyc
+
+# dotcontext runtime state
+.context/plans/
+.context/cache/semantic/
+.context/runtime/
+.context/**/archive/
+

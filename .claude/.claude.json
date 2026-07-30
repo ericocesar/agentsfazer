@@ -1,0 +1,11 @@
+{
+    "mcpServers": {
+      "fazer-ai": {
+        "type": "url",
+        "url": "http://localhost:3004/api/v1/mcp",
+        "headers": {
+          "Authorization": "Bearer secv4_Tp_l-aaJqkwsed4C2qeqoP-PTVYzinjfHC50ncZoRsc"
+        }
+      }
+    }
+  }

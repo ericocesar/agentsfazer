@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "generatedAt": "2026-07-30T14:31:46.170Z",
+  "source": "bootstrap",
+  "stack": {
+    "primaryLanguage": "typescript",
+    "languages": [
+      "javascript",
+      "typescript"
+    ],
+    "frameworks": [],
+    "buildTools": [
+      "docker",
+      "docker-compose"
+    ],
+    "testFrameworks": [],
+    "packageManager": null
+  },
+  "sensors": [
+    {
+      "id": "build",
+      "name": "Build",
+      "description": "Run package build script",
+      "severity": "critical",
+      "command": "npm run build",
+      "script": "build"
+    },
+    {
+      "id": "test",
+      "name": "Test",
+      "description": "Run package test script",
+      "severity": "critical",
+      "command": "npm test -- --runInBand",
+      "script": "test"
+    },
+    {
+      "id": "lint",
+      "name": "Lint",
+      "description": "Run package lint script",
+      "severity": "warning",
+      "command": "npm run lint",
+      "script": "lint"
+    }
+  ]
+}

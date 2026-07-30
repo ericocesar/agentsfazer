@@ -80,22 +80,24 @@ describe("loadKanbanContext", () => {
     expect(k?.steps[0]?.cancelled).toBeUndefined();
   });
 
-  test("captures the card snapshot (title/value/priority/status/attributes)", async () => {
+  test("captures the card snapshot (customName/value/leadStatus/attributes)", async () => {
     const k = await loadKanbanContext(fakeClient({ taskId: 11 }), 7, "1:2");
-    expect(k?.card.title).toBe("João - Plano Pro");
+    // Falls back from raw.title → customName, raw.status → leadStatus
+    expect(k?.card.customName).toBe("João - Plano Pro");
     expect(k?.card.value).toBe(1500);
-    expect(k?.card.priority).toBe("high");
-    expect(k?.card.status).toBe("open");
-    expect(k?.card.attributes.orcamento).toBe(2000);
-    expect(k?.card.attributes.produto).toBe("Plano Pro");
+    expect(k?.card.leadStatus).toBe("open");
+    expect(k?.card.conversationCustomAttributes.orcamento).toBe(2000);
+    expect(k?.card.conversationCustomAttributes.produto).toBe("Plano Pro");
     expect(k?.card.labels).toEqual(["vip", "quente"]);
   });
 
-  test("captures the card's description + scheduled dates", async () => {
+  test("captures the card's notes + scheduledAt", async () => {
     const k = await loadKanbanContext(fakeClient({ taskId: 11 }), 7, "1:2");
-    expect(k?.card.description).toBe("Cliente quer fechar até o fim do mês");
-    expect(k?.card.startDate).toBe("2026-06-10T09:00:00-03:00");
-    expect(k?.card.dueDate).toBe("2026-06-30T18:00:00-03:00");
+    // Falls back from raw.description → notes
+    expect(k?.card.notes).toBe("Cliente quer fechar até o fim do mês");
+    // start_date/due_date are not mapped in new bChat model; scheduledAt is the field
+    // old fork fields fall through as undefined
+    expect(k?.card.scheduledAt).toBeNull();
   });
 
   test("parses steps under wrapped / payload / bare-array shapes", async () => {

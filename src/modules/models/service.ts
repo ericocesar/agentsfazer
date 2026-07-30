@@ -4,7 +4,11 @@ import { MODEL_PROVIDERS } from "@/graph/model-config";
 import { AppError } from "@/lib/errors";
 import { assertSafeOutboundUrl as defaultAssertSafeOutboundUrl } from "@/lib/ssrf";
 import { runScopedOn, type TenantContext } from "@/lib/tenancy";
-import { tryResolveVaultEntry } from "@/modules/vault/service";
+import {
+  isVaultIdRef,
+  resolveVaultRefByName,
+  tryResolveVaultEntry,
+} from "@/modules/vault/service";
 
 // Non-chat model ids to filter out from OpenAI listings.
 const OPENAI_FILTER_SEGMENTS = [
@@ -81,11 +85,26 @@ async function resolveApiKey(
   ctx: TenantContext,
   credentialRef: string,
 ): Promise<string | null> {
+  // credentialRef can be a vault entry NAME (stored by older agent configs) or a vault:<id> ref.
+  // Names must be resolved to vault:<id> first — tryResolveVaultEntry expects the ref format.
+  const ref = isVaultIdRef(credentialRef)
+    ? credentialRef
+    : await resolveNameToRef(base, ctx, credentialRef);
+  if (!ref) return null;
   const entry = await runScopedOn(base, ctx, (db) =>
-    tryResolveVaultEntry<unknown>(db, credentialRef),
+    tryResolveVaultEntry<unknown>(db, ref),
   );
   if (!entry) return null;
   return typeof entry.secret === "string" ? entry.secret : null;
+}
+
+async function resolveNameToRef(
+  base: PrismaClient,
+  ctx: TenantContext,
+  name: string,
+): Promise<string | null> {
+  const resolution = await resolveVaultRefByName(ctx, name, null, base);
+  return resolution.status === "found" ? resolution.ref : null;
 }
 
 export type KeyResolver = (

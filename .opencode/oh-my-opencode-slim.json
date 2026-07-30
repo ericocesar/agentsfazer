@@ -1,0 +1,44 @@
+{
+  "$schema": "https://unpkg.com/oh-my-opencode-slim@latest/oh-my-opencode-slim.schema.json",
+
+  // Nome do preset ativo
+  "preset": "devcesar",
+
+  "presets": {
+    "devcesar": {
+      "orchestrator": {
+        "model": "paid-pro-opencode-go-nvidia",
+        "variant": "high",
+        "skills": ["*"],
+        "mcps": ["*", "!context7"]
+      },
+
+      "oracle": {
+        "model": "9router/minimax/MiniMax-M3",
+        "variant": "high",
+        "temperature": 0.2
+      },
+
+      "explorer": {
+        "model": "9router/free-deepseek-flash",
+        "variant": "low"
+      },
+
+      "librarian": {
+        "model": "9router/free-deepseek-flash",
+        "variant": "low",
+        "mcps": ["websearch", "context7", "gh_grep"]
+      },
+
+      "designer": {
+        "model": "9router/free-deepseek-flash",
+        "variant": "medium"
+      },
+
+      "fixer": {
+        "model": "paid-pro-opencode-go-nvidia",
+        "variant": "high"
+      }
+    }
+  }
+}

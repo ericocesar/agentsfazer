@@ -145,14 +145,13 @@ describe("native tools", () => {
       { id: 22, name: "Ganho" },
     ],
     card: {
-      title: "Lead 1",
-      description: null,
-      priority: null,
-      status: "open",
+      customName: "Lead 1",
+      notes: null,
+      leadStatus: "open",
       value: null,
-      startDate: null,
-      dueDate: null,
-      attributes: {},
+      scheduledAt: null,
+      assignedUserId: null,
+      conversationCustomAttributes: {},
       labels: [],
     },
   };
@@ -167,7 +166,7 @@ describe("native tools", () => {
     const move = byName(tools, "kanban_move_card");
     // The current step + available steps are grounded into the description as an XML block (the agent
     // picks a step name from <available_steps>).
-    expect(move.description).toContain('<kanban_card board="Vendas SDR">');
+    expect(move.description).toContain('<kanban_card funnel="Vendas SDR">');
     expect(move.description).toContain(
       "<current_step>Novo Lead</current_step>",
     );
@@ -183,7 +182,7 @@ describe("native tools", () => {
     const out = String(
       await byName(tools, "kanban_move_card").invoke({ targetStep: "Ganho" }),
     );
-    expect(out.toLowerCase()).toContain("no linked kanban card");
+    expect(out.toLowerCase()).toContain("no linked pipeline card");
     expect(calls).toEqual([]);
   });
 
@@ -197,19 +196,18 @@ describe("native tools", () => {
     const tool = byName(tools, "update_kanban_task");
     // The current card values are grounded into the description as an XML block (element names mirror
     // the args) so the model edits only what changed.
-    expect(tool.description).toContain('<current_card board="Vendas SDR">');
-    expect(tool.description).toContain("<title>Lead 1</title>");
+    expect(tool.description).toContain('<current_card funnel="Vendas SDR">');
+    expect(tool.description).toContain("<customName>Lead 1</customName>");
     const out = String(
       await tool.invoke({
-        title: "Maria Souza",
-        priority: "high",
-        dueDate: "2026-06-20",
+        customName: "Maria Souza",
+        leadStatus: "won",
       }),
     );
     expect(calls).toEqual([
       [
         "updateKanbanTask",
-        [11, { title: "Maria Souza", priority: "high", dueDate: "2026-06-20" }],
+        [11, { customName: "Maria Souza", leadStatus: "won" }],
       ],
     ]);
     expect(out.toLowerCase()).toContain("updated");
@@ -231,9 +229,9 @@ describe("native tools", () => {
     const { client, calls } = recordingClient();
     const tools = buildNativeTools({ client, conversationId: 7 });
     const out = String(
-      await byName(tools, "update_kanban_task").invoke({ title: "x" }),
+      await byName(tools, "update_kanban_task").invoke({ customName: "x" }),
     );
-    expect(out.toLowerCase()).toContain("no linked kanban card");
+    expect(out.toLowerCase()).toContain("no linked pipeline card");
     expect(calls).toEqual([]);
   });
 
@@ -256,11 +254,11 @@ describe("native tools", () => {
     );
   });
 
-  test("set_custom_attribute task scope writes to the linked card", async () => {
+  test("set_custom_attribute task scope writes to the conversation (bChat redirect)", async () => {
     const calls: Array<[string, unknown[]]> = [];
     const client = {
-      setKanbanTaskCustomAttributes: async (...args: unknown[]) => {
-        calls.push(["setKanbanTaskCustomAttributes", args]);
+      setConversationCustomAttributes: async (...args: unknown[]) => {
+        calls.push(["setConversationCustomAttributes", args]);
         return {};
       },
     } as unknown as ChatwootClient;
@@ -275,7 +273,7 @@ describe("native tools", () => {
       scope: "task",
     });
     expect(calls).toEqual([
-      ["setKanbanTaskCustomAttributes", [11, { ticket_size: "5000" }]],
+      ["setConversationCustomAttributes", [7, { ticket_size: "5000" }]],
     ]);
   });
 
@@ -326,10 +324,11 @@ describe("native tools", () => {
     expect(setCount).toBe(0);
   });
 
-  test("assign_label task scope appends to the card's labels (snapshot read + write)", async () => {
+  test("assign_label task scope adds to conversation labels (bChat redirect)", async () => {
     const setCalls: unknown[][] = [];
     const client = {
-      setKanbanTaskLabels: async (...args: unknown[]) => {
+      getConversationLabels: async () => [],
+      setConversationLabels: async (...args: unknown[]) => {
         setCalls.push(args);
         return {};
       },
@@ -345,8 +344,8 @@ describe("native tools", () => {
         scope: "task",
       }),
     );
-    expect(setCalls).toEqual([[11, ["quente"]]]);
-    expect(out.toLowerCase()).toContain("card");
+    expect(setCalls).toEqual([[9, ["quente"]]]); // conversationId, not taskId
+    expect(out.toLowerCase()).toContain("conversation");
   });
 
   test("assign_label task scope is offered only when a card is linked", () => {
@@ -359,8 +358,8 @@ describe("native tools", () => {
       buildNativeTools({ client, conversationId: 9 }),
       "assign_label",
     ).description;
-    expect(withCard).toContain("kanban card");
-    expect(without ?? "").not.toContain("kanban card");
+    expect(withCard).toContain("pipeline card");
+    expect(without ?? "").not.toContain("pipeline card");
   });
 
   test("assign_label contact scope without a contact in ctx → safe message (no write)", async () => {
@@ -677,14 +676,13 @@ describe("handoff targeting", () => {
       { id: 22, name: "Ganho" },
     ],
     card: {
-      title: "Lead 1",
-      description: null,
-      priority: null,
-      status: "open",
+      customName: "Lead 1",
+      notes: null,
+      leadStatus: "open",
       value: null,
-      startDate: null,
-      dueDate: null,
-      attributes: {},
+      scheduledAt: null,
+      assignedUserId: null,
+      conversationCustomAttributes: {},
       labels: [],
     },
   };

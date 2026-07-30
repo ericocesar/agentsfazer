@@ -342,7 +342,7 @@ function setCustomAttributeTool(ctx: ToolCtx) {
     ? z.enum(["conversation", "contact", "task"])
     : z.enum(["conversation", "contact"]);
   const description = ctx.vocab
-    ? `Set a custom attribute on the conversation, the contact${taskScope ? ", or this conversation's kanban card" : ""}. Use \`scope\` to choose; the known keys (and allowed values for list types) per scope are listed in \`<known_attributes>\` below.`
+    ? `Set a custom attribute on the conversation, the contact${taskScope ? ", or this conversation's pipeline card" : ""}. Use \`scope\` to choose; the known keys (and allowed values for list types) per scope are listed in \`<known_attributes>\` below.${taskScope ? " Note: bChat cards inherit attributes from the conversation — scope 'task' updates conversation attributes." : ""}`
     : "Set a custom attribute on the conversation (scope='conversation', default) or the contact (scope='contact').";
   const attributesXml = ctx.vocab
     ? knownAttributesXml(convDefs, contactDefs, taskScope ? taskDefs : null)
@@ -361,10 +361,11 @@ function setCustomAttributeTool(ctx: ToolCtx) {
         if (!ctx.kanban) {
           return "Could not set the task attribute (this conversation has no linked card).";
         }
-        await ctx.client.setKanbanTaskCustomAttributes(ctx.kanban.taskId, {
+        // bChat: cards don't have custom_attributes — redirect to conversation.
+        await ctx.client.setConversationCustomAttributes(ctx.conversationId, {
           [key]: value,
         });
-        return `Task attribute ${key} set.`;
+        return `Task attribute ${key} set (on conversation).`;
       }
       if (scope === "contact") {
         if (!ctx.base || ctx.tenantId == null || ctx.contactDbId == null) {
@@ -439,7 +440,7 @@ function assignLabelTool(ctx: ToolCtx) {
   const scopeSchema = taskScope
     ? z.enum(["conversation", "contact", "task"])
     : z.enum(["conversation", "contact"]);
-  const baseDescription = `Add a label (tag) to categorize the conversation, the contact${taskScope ? ", or this conversation's kanban card" : ""}. Use scope to choose (default 'conversation'). Existing labels are kept.${labelsXml ? " Prefer an EXISTING label from `<existing_labels>` below." : ""}`;
+  const baseDescription = `Add a label (tag) to categorize the conversation, the contact${taskScope ? ", or this conversation's pipeline card" : ""}. Use scope to choose (default 'conversation'). Existing labels are kept.${labelsXml ? " Prefer an EXISTING label from `<existing_labels>` below." : ""}${taskScope ? " Note: card labels are inherited from the conversation (bChat) — scope 'task' adds to the conversation labels." : ""}`;
   return tool(
     async ({
       label,
@@ -454,15 +455,16 @@ function assignLabelTool(ctx: ToolCtx) {
         if (!ctx.kanban) {
           return "Could not add the label (this conversation has no linked card).";
         }
-        const current = ctx.kanban.card.labels;
-        if (current.includes(clean)) {
-          return `Label "${clean}" was already on the card.`;
-        }
-        await ctx.client.setKanbanTaskLabels(ctx.kanban.taskId, [
+        // bChat: card labels are read-only, inherited from conversation — redirect.
+        const current = await ctx.client.getConversationLabels(
+          ctx.conversationId,
+        );
+        if (current.includes(clean)) return `Label "${clean}" was already set.`;
+        await ctx.client.setConversationLabels(ctx.conversationId, [
           ...current,
           clean,
         ]);
-        return `Label "${clean}" added to the kanban card.`;
+        return `Label "${clean}" added to the conversation (card inherits it).`;
       }
       if (scope === "contact") {
         if (!ctx.base || ctx.tenantId == null || ctx.contactDbId == null) {
@@ -548,7 +550,7 @@ function truncate(s: string, max: number): string {
 // note is the element text and cancelled/lost steps carry status="cancelled" — the "dedicated
 // funnel-step description" surfaced from Chatwoot itself).
 function kanbanMoveContextXml(k: KanbanContext): string {
-  const lines: string[] = [`<kanban_card${xmlAttr("board", k.boardName)}>`];
+  const lines: string[] = [`<kanban_card${xmlAttr("funnel", k.boardName)}>`];
   if (k.currentStepName)
     lines.push(
       `  <current_step>${xmlEscape(k.currentStepName)}</current_step>`,
@@ -569,63 +571,63 @@ function kanbanMoveContextXml(k: KanbanContext): string {
   return lines.join("\n");
 }
 
-// THIS card's current EDITABLE fields as an XML block for update_kanban_task — the exact set the tool
-// can change, with element names mirroring its args (title/description/priority/startDate/dueDate).
-// Only fields that are set are emitted, so the model patches just what differs without re-dumping the
-// whole card (move grounds on the funnel position, update grounds on these fields; no overlap).
+// THIS card's current EDITABLE fields as an XML block for update_kanban_task — emitted fields mirror
+// the bChat pipeline card_params (customName, notes, leadStatus, scheduledAt, assignedUserId).
+// Only fields that are set are emitted, so the model patches just what differs (move grounds on the
+// funnel position, update grounds on these fields; no overlap).
 function kanbanCardFieldsXml(k: KanbanContext): string {
   const c = k.card;
-  const lines: string[] = [`<current_card${xmlAttr("board", k.boardName)}>`];
-  if (c.title) lines.push(`  <title>${xmlEscape(c.title)}</title>`);
-  if (c.description)
-    lines.push(
-      `  <description>${xmlEscape(truncate(c.description, 80))}</description>`,
-    );
-  if (c.priority) lines.push(`  <priority>${xmlEscape(c.priority)}</priority>`);
-  if (c.startDate)
-    lines.push(`  <startDate>${xmlEscape(c.startDate)}</startDate>`);
-  if (c.dueDate) lines.push(`  <dueDate>${xmlEscape(c.dueDate)}</dueDate>`);
+  const lines: string[] = [`<current_card${xmlAttr("funnel", k.boardName)}>`];
+  if (c.customName)
+    lines.push(`  <customName>${xmlEscape(c.customName)}</customName>`);
+  if (c.notes)
+    lines.push(`  <notes>${xmlEscape(truncate(c.notes, 80))}</notes>`);
+  if (c.leadStatus)
+    lines.push(`  <leadStatus>${xmlEscape(c.leadStatus)}</leadStatus>`);
+  if (c.scheduledAt)
+    lines.push(`  <scheduledAt>${xmlEscape(c.scheduledAt)}</scheduledAt>`);
+  if (c.assignedUserId)
+    lines.push(`  <assignedUserId>${c.assignedUserId}</assignedUserId>`);
   lines.push("</current_card>");
   return lines.join("\n");
 }
 
-// Move THIS conversation's Chatwoot Pro kanban card to another funnel step BY NAME. The card id, the
-// board's steps (with the operator's per-step notes), and the card's current data are resolved at turn
-// prep (ctx.kanban, confirmed against the Pro fork jbuilders: conversation.kanban_task_id →
-// task.board_id/board_step_id/title/value/priority/status/custom_attributes → board steps), so the
-// model picks a step name with full funnel context — it never has to know ids. No linked card ⇒ the
-// tool says so and does nothing.
+// Move THIS conversation's pipeline card to another stage BY NAME (bChat pipeline API:
+// PATCH /cards/:id { card: { stage_id } }). The card id, the funnel's stages (with the operator's
+// per-stage notes), and the card's current data are resolved at turn prep (ctx.kanban), so the
+// model picks a stage name with full funnel context — it never has to know ids. No linked card ⇒
+// the tool says so and does nothing.
 function kanbanMoveTool(ctx: ToolCtx) {
   const k = ctx.kanban;
-  // Move grounds on the funnel position (current step + available steps), surfaced in the XML block;
+  // Move grounds on the funnel position (current stage + available stages), surfaced in the XML block;
   // it deliberately does NOT re-list the card's editable fields — update_kanban_task owns those.
   const baseDescription = k
-    ? "Move this conversation's kanban card to another funnel step. Pass the target step's name as `targetStep`, picking one from `<available_steps>` below (the card's board and current step are shown there too)."
-    : "Move this conversation's kanban card to another funnel step. This conversation has no linked card, so there is nothing to move.";
+    ? "Move this conversation's pipeline card to another funnel stage. Pass the target stage's name as `targetStep`, picking one from `<available_steps>` below (the card's funnel and current stage are shown there too)."
+    : "Move this conversation's pipeline card to another funnel stage. This conversation has no linked card, so there is nothing to move.";
   const contextXml = k ? kanbanMoveContextXml(k) : undefined;
   return tool(
     async ({ targetStep }: { targetStep: string }) => {
       if (!ctx.kanban) {
-        return "This conversation has no linked kanban card, so there is nothing to move.";
+        return "This conversation has no linked pipeline card, so there is nothing to move.";
       }
       const step = matchKanbanStep(ctx.kanban.steps, targetStep);
       if (!step) {
-        return `Unknown funnel step "${targetStep}". Available: ${ctx.kanban.steps
+        return `Unknown funnel stage "${targetStep}". Available: ${ctx.kanban.steps
           .map((s) => s.name)
           .join(", ")}.`;
       }
       if (step.id === ctx.kanban.currentStepId) {
         return `The card is already in "${step.name}".`;
       }
-      const taskId = ctx.kanban.taskId;
-      await ctx.client.moveKanbanTask(taskId, step.id);
+      const cardId = ctx.kanban.taskId;
+      await ctx.client.moveKanbanTask(cardId, step.id);
       // Best-effort fleet event (ids only — no PII).
       if (ctx.base && ctx.tenantId != null) {
         const tenantId = ctx.tenantId;
         try {
           await runScopedOn(ctx.base, sysCtx(tenantId), (db) =>
             emitOutbound(db, tenantId, "kanban.card_moved", {
-              card_id: String(taskId),
+              card_id: String(cardId),
               to_step: String(step.id),
               conversation_id: String(ctx.conversationId),
             }),
@@ -651,51 +653,46 @@ function kanbanMoveTool(ctx: ToolCtx) {
         targetStep: z
           .string()
           .min(1)
-          .describe("The funnel step to move the card to, by name."),
+          .describe("The funnel stage to move the card to, by name."),
       }),
     },
   );
 }
 
-// Update THIS conversation's Chatwoot Pro kanban card scalar fields (title, description, priority,
-// scheduled dates) BY a partial patch. The card id is resolved at turn prep (ctx.kanban.taskId, never
-// a tool arg) and the card's current values are surfaced (describeCard) so the model can update only
-// what changed. Field set CONFIRMED against the Pro fork chatwoot-pro-main (tasks#update task_params +
-// Task::PRIORITIES). Moving steps, labels, attributes and the monetary `value` have their own tools, so
-// they are deliberately out of scope here. No linked card ⇒ the tool says so and does nothing.
+// Update THIS conversation's pipeline card scalar fields (customName, notes, leadStatus, scheduledAt,
+// assignedUserId) via a partial patch (bChat pipeline doc: PATCH /cards/:id with card root key).
+// The card id is resolved at turn prep (ctx.kanban.taskId, never a tool arg) and the card's current
+// values are surfaced (<current_card>) so the model can update only what changed.
+// Moving stages, labels, custom_attributes and items have their own channels and are out of scope.
+// No linked card ⇒ the tool says so and does nothing.
 function updateKanbanTaskTool(ctx: ToolCtx) {
   const k = ctx.kanban;
-  const baseDescription = `Update this conversation's kanban card: its title, description, priority (one of urgent/high/medium/low) and/or scheduled dates. Provide ONLY the fields you want to change; the card's current values are shown in \`<current_card>\` below. Dates are ISO 8601 (e.g. "2026-06-20" or "2026-06-20T14:00:00-03:00") and the start date must not be after the due date. To move the card between funnel steps, add a label, set a custom attribute or change the amount, use the dedicated tools instead.`;
+  const baseDescription = `Update this conversation's pipeline card: its customName (card title), notes (description), leadStatus (open/won/lost), scheduledAt (datetime), and/or assignedUserId (agent id). Provide ONLY the fields you want to change; the card's current values are shown in \`<current_card>\` below. Dates are ISO 8601 (e.g. "2026-06-20T14:00:00-03:00"). To move the card between funnel stages, add a label, set a custom attribute or change card items, use the dedicated tools instead.`;
   const contextXml = k ? kanbanCardFieldsXml(k) : undefined;
   return tool(
     async (input: {
-      title?: string;
-      description?: string;
-      priority?: "urgent" | "high" | "medium" | "low";
-      dueDate?: string;
-      startDate?: string;
+      customName?: string;
+      notes?: string;
+      leadStatus?: "open" | "won" | "lost";
+      scheduledAt?: string;
+      assignedUserId?: number;
     }) => {
       if (!ctx.kanban) {
-        return "This conversation has no linked kanban card, so there is nothing to update.";
+        return "This conversation has no linked pipeline card, so there is nothing to update.";
       }
-      const fields: {
-        title?: string;
-        description?: string;
-        priority?: "urgent" | "high" | "medium" | "low";
-        startDate?: string;
-        dueDate?: string;
-      } = {};
-      if (input.title !== undefined) fields.title = input.title;
-      if (input.description !== undefined)
-        fields.description = input.description;
-      if (input.priority !== undefined) fields.priority = input.priority;
-      if (input.startDate !== undefined) fields.startDate = input.startDate;
-      if (input.dueDate !== undefined) fields.dueDate = input.dueDate;
+      const fields: Parameters<ChatwootClient["updateKanbanTask"]>[1] = {};
+      if (input.customName !== undefined) fields.customName = input.customName;
+      if (input.notes !== undefined) fields.notes = input.notes;
+      if (input.leadStatus !== undefined) fields.leadStatus = input.leadStatus;
+      if (input.scheduledAt !== undefined)
+        fields.scheduledAt = input.scheduledAt;
+      if (input.assignedUserId !== undefined)
+        fields.assignedUserId = input.assignedUserId;
       if (Object.keys(fields).length === 0) {
-        return "No fields provided. Set at least one of title, description, priority, dueDate or startDate.";
+        return "No fields provided. Set at least one of customName, notes, leadStatus, scheduledAt or assignedUserId.";
       }
       await ctx.client.updateKanbanTask(ctx.kanban.taskId, fields);
-      return `Updated the kanban card (${Object.keys(fields).join(", ")}).`;
+      return `Updated the pipeline card (${Object.keys(fields).join(", ")}).`;
     },
     {
       name: "update_kanban_task",
@@ -706,29 +703,34 @@ function updateKanbanTaskTool(ctx: ToolCtx) {
         contextXml,
       ),
       schema: z.object({
-        title: z
+        customName: z
           .string()
           .min(1)
           .max(255)
           .optional()
-          .describe("New card title."),
-        description: z
+          .describe("New card name (custom_name)."),
+        notes: z
           .string()
           .max(5000)
           .optional()
-          .describe("New card description."),
-        priority: z
-          .enum(["urgent", "high", "medium", "low"])
+          .describe("Card notes / description."),
+        leadStatus: z
+          .enum(["open", "won", "lost"])
           .optional()
-          .describe("Card priority."),
-        dueDate: z
+          .describe(
+            "Card deal status. 'won' or 'lost' requires closingReasonId (use conversation).",
+          ),
+        scheduledAt: z
           .string()
           .optional()
-          .describe("Due date, ISO 8601 (date or datetime)."),
-        startDate: z
-          .string()
+          .describe(
+            "Scheduled datetime, ISO 8601 (e.g. '2026-06-20T14:00:00-03:00').",
+          ),
+        assignedUserId: z
+          .number()
+          .int()
           .optional()
-          .describe("Start date, ISO 8601 (date or datetime)."),
+          .describe("Agent/team member id assigned to the card."),
       }),
     },
   );

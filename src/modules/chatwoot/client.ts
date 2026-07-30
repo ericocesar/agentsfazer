@@ -857,12 +857,11 @@ export class ChatwootClient {
     return { token: res.token, websiteUrl: res.website_url ?? null };
   }
 
-  // ── admin-token: Kanban driver (Pro) ──
-  // Drives the funnel/board/step/card model the fazer.ai Chatwoot Pro owns (fazer.ai agents has no
-  // Funnel/Card tables of its own). Routes: /kanban/{boards,boards/:id/steps,tasks}. The
-  // create/update bodies wrap the Rails-required root key (board/step/task); their inner shape
-  // is owned by the /desenhar-funil wizard, so they are passed through as records.
-  // Move/bind params are fork-confirmed (board_step_id, inbox_ids, agent_ids).
+  // ── admin-token: Pipeline driver (bChat) ──
+  // Drives the funnel/stage/card model via bChat's Pipeline API. Routes:
+  // /funnels, /funnels/:id/stages, /cards. Movement between stages is via
+  // PATCH /cards/:id { card: { stage_id } }. Labels and custom_attributes
+  // live on the conversation, not the card (see docs/integrations/bchat/pipeline.md).
 
   listKanbanBoards(): Promise<unknown> {
     return this.request(this.config.adminToken, "GET", "/kanban/boards");
@@ -886,11 +885,11 @@ export class ChatwootClient {
     );
   }
 
-  listKanbanSteps(boardId: number): Promise<unknown> {
+  listKanbanSteps(funnelId: number): Promise<unknown> {
     return this.request(
       this.config.adminToken,
       "GET",
-      `/kanban/boards/${boardId}/steps`,
+      `/funnels/${funnelId}/stages`,
     );
   }
 
@@ -937,120 +936,100 @@ export class ChatwootClient {
     });
   }
 
-  // Move a card to another step (and optionally reorder before a sibling). board_step_id +
-  // insert_before_task_id are the fork's tasks#move params.
-  moveKanbanTask(
-    taskId: number,
-    boardStepId: number,
-    insertBeforeTaskId?: number,
-  ): Promise<unknown> {
-    return this.request(
-      this.config.adminToken,
-      "POST",
-      `/kanban/tasks/${taskId}/move`,
-      {
-        board_step_id: boardStepId,
-        ...(insertBeforeTaskId != null
-          ? { insert_before_task_id: insertBeforeTaskId }
-          : {}),
-      },
-    );
+  // Move a card to another stage by updating its stage_id (bChat pipeline doc: PATCH /cards/:id
+  // with card.stage_id moves between stages within a funnel or across funnels).
+  // Reorder (insert_before) is not supported in bChat's card update — removed from the old fork param.
+  moveKanbanTask(cardId: number, stageId: number): Promise<unknown> {
+    return this.request(this.config.adminToken, "PATCH", `/cards/${cardId}`, {
+      card: { stage_id: stageId },
+    });
   }
 
-  getKanbanTask(taskId: number): Promise<unknown> {
-    return this.request(
-      this.config.adminToken,
-      "GET",
-      `/kanban/tasks/${taskId}`,
-    );
+  getKanbanTask(cardId: number): Promise<unknown> {
+    return this.request(this.config.adminToken, "GET", `/cards/${cardId}`);
   }
 
-  // Merge custom attributes onto a kanban task (PATCH wraps the Rails `task` root key; the task's
-  // custom_attributes is a jsonb that the update assigns, so we merge in the caller).
+  // Cards do not have their own custom_attributes column in bChat (doc: pipeline.md). Attributes
+  // live on the linked conversation instead. This method redirects to the conversation-level update.
+  // Callers should prefer setConversationCustomAttributes directly when possible.
   setKanbanTaskCustomAttributes(
-    taskId: number,
+    conversationId: number,
     customAttributes: Record<string, unknown>,
   ): Promise<unknown> {
-    return this.request(
-      this.config.adminToken,
-      "PATCH",
-      `/kanban/tasks/${taskId}`,
-      { task: { custom_attributes: customAttributes } },
+    return this.setConversationCustomAttributes(
+      conversationId,
+      customAttributes,
     );
   }
 
-  // Kanban task labels (admin token). The fork's tasks#update accepts `task: { labels: [...] }` and
-  // calls update_labels, which REPLACES the whole set (same acts_as_taggable as conversation/contact),
-  // so assign_label reads the current set (from the card snapshot) then appends. Shape CONFIRMED
-  // against the chatwoot-pro `feat-kanban-task-labels` branch (tasks_controller#update_task_labels;
-  // _task.json.jbuilder renders `json.labels task.cached_label_list_array`).
-  setKanbanTaskLabels(taskId: number, labels: string[]): Promise<unknown> {
-    return this.request(
-      this.config.adminToken,
-      "PATCH",
-      `/kanban/tasks/${taskId}`,
-      { task: { labels } },
-    );
+  // Card labels in bChat are inherited from the linked conversation (read-only on the card response).
+  // To add/remove labels, use the conversation endpoints. This method redirects to the conversation.
+  // Callers should prefer setConversationLabels directly when possible.
+  setKanbanTaskLabels(
+    conversationId: number,
+    labels: string[],
+  ): Promise<unknown> {
+    return this.setConversationLabels(conversationId, labels);
   }
 
-  // Update scalar fields of a kanban task (admin token, PATCH wraps the Rails `task` root key). The
-  // fork's tasks#update permits title/description/priority/start_date/due_date among others (CONFIRMED
-  // against chatwoot-pro-main: task_params permit list; priority ∈ Task::PRIORITIES urgent|high|medium|
-  // low; start_date/due_date are :datetime with start ≤ due). Only the provided keys are sent (partial
-  // update). value/board_step_id/labels/custom_attributes have their own paths and are NOT sent here.
-  // Clearable fields (description/start_date/due_date) accept `null` to wipe the value (used by
-  // /reset). NOTE (open-validation): nulling a :datetime via the fork's task_params should be
-  // confirmed once against a live card.
+  // Update scalar fields of a card (bChat pipeline doc: PATCH /cards/:id with card root key).
+  // bChat card_params: custom_name, notes, lead_status, closing_reason_id, scheduled_at,
+  // assigned_user_id, stage_id (move), contact_id, conversation_id.
+  // priority/startDate/dueDate from the old kanban fork are removed; scheduled_at replaces both dates.
+  // Notes and scheduled_at accept null to clear. lead_status ∈ open|won|lost.
+  // Labels and custom_attributes are conversation-level (not sent here).
   updateKanbanTask(
-    taskId: number,
+    cardId: number,
     fields: {
-      title?: string;
-      description?: string | null;
-      priority?: "urgent" | "high" | "medium" | "low";
-      startDate?: string | null;
-      dueDate?: string | null;
+      customName?: string;
+      notes?: string | null;
+      leadStatus?: "open" | "won" | "lost";
+      closingReasonId?: number | null;
+      scheduledAt?: string | null;
+      assignedUserId?: number | null;
     },
   ): Promise<unknown> {
-    const task: Record<string, unknown> = {};
-    if (fields.title !== undefined) task.title = fields.title;
-    if (fields.description !== undefined) task.description = fields.description;
-    if (fields.priority !== undefined) task.priority = fields.priority;
-    if (fields.startDate !== undefined) task.start_date = fields.startDate;
-    if (fields.dueDate !== undefined) task.due_date = fields.dueDate;
-    return this.request(
-      this.config.adminToken,
-      "PATCH",
-      `/kanban/tasks/${taskId}`,
-      { task },
-    );
+    const card: Record<string, unknown> = {};
+    if (fields.customName !== undefined) card.custom_name = fields.customName;
+    if (fields.notes !== undefined) card.notes = fields.notes;
+    if (fields.leadStatus !== undefined) card.lead_status = fields.leadStatus;
+    if (fields.closingReasonId !== undefined)
+      card.closing_reason_id = fields.closingReasonId;
+    if (fields.scheduledAt !== undefined)
+      card.scheduled_at = fields.scheduledAt;
+    if (fields.assignedUserId !== undefined)
+      card.assigned_user_id = fields.assignedUserId;
+    return this.request(this.config.adminToken, "PATCH", `/cards/${cardId}`, {
+      card,
+    });
   }
 
-  // The kanban card (task) id linked to a conversation, read from the embedded `kanban_task` OBJECT the
-  // Pro fork renders on the conversation payload — NOT a flat `kanban_task_id` (the jbuilder never emits
-  // that key, which is the bug that left the card context empty). null when there is no card.
+  // The card id linked to a conversation, read from the embedded `kanban_task` (old fork) or
+  // `card` (bChat) OBJECT on the conversation payload. bChat card response includes
+  // conversation_id so the relationship exists both ways. null when there is no card.
   async kanbanTaskIdForConversation(
     conversationId: number,
   ): Promise<number | null> {
     const conv = (await this.getConversation(conversationId)) as {
       kanban_task?: { id?: unknown } | null;
+      card?: { id?: unknown } | null;
     } | null;
-    const id = Number(conv?.kanban_task?.id);
+    const id = Number(conv?.kanban_task?.id ?? conv?.card?.id);
     return Number.isInteger(id) && id > 0 ? id : null;
   }
 
-  // The kanban card (task) OBJECT linked to a conversation. The Pro fork embeds the whole card under
-  // `kanban_task` on the conversation payload (`json.kanban_task do … partial 'kanban/tasks/task'` —
-  // SAME shape as GET /kanban/tasks/:id), confirmed against conversations/_conversation.json.jbuilder
-  // (2026-06-21). Returns the raw object so turn-prep builds the kanban context from ONE conversation
-  // GET (no extra task fetch); null when the conversation has no card. NOTE: the embedded board.steps
-  // carry only {id,name,color}; per-step description/cancelled come from the board_steps endpoint.
+  // The card OBJECT linked to a conversation. Checks both `kanban_task` (old fork key) and `card`
+  // (bChat key) on the conversation payload. Returns the raw object so turn-prep builds the pipeline
+  // context; null when the conversation has no card. bChat stages are resolved separately via
+  // listKanbanSteps (cached per funnel).
   async kanbanTaskForConversation(
     conversationId: number,
   ): Promise<Record<string, unknown> | null> {
     const conv = (await this.getConversation(conversationId)) as {
       kanban_task?: unknown;
+      card?: unknown;
     } | null;
-    const task = conv?.kanban_task;
+    const task = conv?.kanban_task ?? conv?.card;
     return task && typeof task === "object" && !Array.isArray(task)
       ? (task as Record<string, unknown>)
       : null;

@@ -3,7 +3,11 @@ import basePrisma from "@/api/lib/prisma";
 import { AppError } from "@/lib/errors";
 import { assertSafeOutboundUrl as defaultAssertSafeOutboundUrl } from "@/lib/ssrf";
 import { runScopedOn, type TenantContext } from "@/lib/tenancy";
-import { tryResolveVaultEntry } from "@/modules/vault/service";
+import {
+  isVaultIdRef,
+  resolveVaultRefByName,
+  tryResolveVaultEntry,
+} from "@/modules/vault/service";
 import { TTS_PROVIDER_NAMES } from "./providers";
 
 // Lists the voices / models the editor's TTS combobox offers (item 10). OpenAI has no list endpoint
@@ -67,11 +71,26 @@ async function resolveApiKey(
   ctx: TenantContext,
   credentialRef: string,
 ): Promise<string | null> {
+  // credentialRef can be a vault entry NAME (stored by older agent configs) or a vault:<id> ref.
+  // Names must be resolved to vault:<id> first — tryResolveVaultEntry expects the ref format.
+  const ref = isVaultIdRef(credentialRef)
+    ? credentialRef
+    : await resolveNameToRef(base, ctx, credentialRef);
+  if (!ref) return null;
   const entry = await runScopedOn(base, ctx, (db) =>
-    tryResolveVaultEntry<unknown>(db, credentialRef),
+    tryResolveVaultEntry<unknown>(db, ref),
   );
   if (!entry) return null;
   return typeof entry.secret === "string" ? entry.secret : null;
+}
+
+async function resolveNameToRef(
+  base: PrismaClient,
+  ctx: TenantContext,
+  name: string,
+): Promise<string | null> {
+  const resolution = await resolveVaultRefByName(ctx, name, null, base);
+  return resolution.status === "found" ? resolution.ref : null;
 }
 
 export type KeyResolver = (
@@ -145,6 +164,10 @@ export async function listTtsOptions(
       signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) {
+      // 401/403: key exists but scopes don't include this listing endpoint (e.g.
+      // "voices:read" / "models:read"). Recoverable: return empty so the ComboBox
+      // falls through to the "use custom" text entry instead of blocking the operator.
+      if (res.status === 401 || res.status === 403) return [];
       throw new AppError(
         `ElevenLabs ${kind} endpoint returned ${res.status}`,
         502,
