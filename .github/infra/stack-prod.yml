@@ -1,7 +1,6 @@
 services:
   agents:
     image: ghcr.io/ericocesar/agents:${IMAGE_TAG}
-    pull_policy: always
     restart: always
     environment:
       - NODE_ENV=production
