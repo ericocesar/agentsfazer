@@ -2,6 +2,8 @@ services:
   agents:
     image: ghcr.io/ericocesar/agents:${IMAGE_TAG}
     restart: always
+    env_file:
+      - stack-prod.env
     environment:
       - NODE_ENV=production
       - PORT=3000
@@ -63,6 +65,8 @@ services:
   postgres_agents:
     image: "pgvector/pgvector:pg17"
     restart: always
+    env_file:
+      - stack-prod.env
     environment:
       - POSTGRES_DB=agents
       - POSTGRES_USER=${POSTGRES_USER}
