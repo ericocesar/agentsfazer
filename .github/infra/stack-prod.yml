@@ -34,7 +34,7 @@ services:
       timeout: 10s
       retries: 5
     depends_on:
-      - postgres
+      - postgres_agents
 
     networks:
       - externa
@@ -60,7 +60,7 @@ services:
         - "traefik.http.routers.agents-insecure.entrypoints=web"
         - "traefik.http.routers.agents-insecure.middlewares=redirect-to-https"
         - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
-  postgres:
+  postgres_agents:
     image: "pgvector/pgvector:pg17"
     restart: always
     environment:
