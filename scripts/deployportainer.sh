@@ -299,9 +299,9 @@ for line in Path('${env_file}').read_text(encoding='utf-8').splitlines():
     m = re.match(r'^([A-Za-z_][A-Za-z0-9_]*)=(.*)', line)
     if not m:
         continue
-    key = m.group(1)
-    val = m.group(2)
-    if len(val) >= 2 and val[0] == val[-1] and val[0] in ('\"', \"'\"):
+    key = m.group(1).strip()
+    val = m.group(2).strip()
+    if len(val) >= 2 and val[0] == val[-1] and val[0] in ('"', "'"):
         val = val[1:-1]
     envs.append({'name': key, 'value': val})
 
